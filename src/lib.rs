@@ -1,10 +1,10 @@
-use recursion::{
-    Collapsible, Expandable, ExpandableExt, MappableFrame, PartiallyApplied,
+use recursion::{Collapsible, Expandable, ExpandableExt, MappableFrame, PartiallyApplied};
+use said::{
+    derivation::{HashFunction, HashFunctionCode},
+    SelfAddressingIdentifier,
 };
-use said::{SelfAddressingIdentifier, derivation::{HashFunction, HashFunctionCode}};
-use serde::{Deserialize, Deserializer, Serialize};
 use serde::de::Error;
-
+use serde::{Deserialize, Deserializer, Serialize};
 
 #[derive(Serialize, Debug)]
 #[serde(untagged)]
@@ -18,14 +18,17 @@ pub enum Nested {
 }
 
 impl Nested {
-	pub fn said(text: &str) -> Self {
-		Self::Said(HashFunction::from(HashFunctionCode::Blake3_256).derive(text.as_bytes()))
-	}
+    pub fn said(text: &str) -> Self {
+        Self::Said(HashFunction::from(HashFunctionCode::Blake3_256).derive(text.as_bytes()))
+    }
 
-	pub fn value(list: Vec<Nested>) -> Self {
-		let serialized_vec = serde_json::to_vec(&list).unwrap();
-		Self::Value { d: HashFunction::from(HashFunctionCode::Blake3_256).derive(&serialized_vec), refs: Box::new(list) }
-	}
+    pub fn value(list: Vec<Nested>) -> Self {
+        let serialized_vec = serde_json::to_vec(&list).unwrap();
+        Self::Value {
+            d: HashFunction::from(HashFunctionCode::Blake3_256).derive(&serialized_vec),
+            refs: Box::new(list),
+        }
+    }
 }
 
 pub enum NestedFrame<A> {
@@ -83,14 +86,14 @@ impl Expandable for Nested {
 
 #[derive(Debug, thiserror::Error)]
 enum DeserializationError {
-	#[error("Missing 'd' field")]
+    #[error("Missing 'd' field")]
     MissingSaid,
-	#[error("Missing 'refs' field")]
+    #[error("Missing 'refs' field")]
     MissingRefs,
-	#[error("Wrong said format")]
-	WrongSaidFormat,
-	#[error("Wrong refs format")]
-	WrongRefsFormat,
+    #[error("Wrong said format")]
+    WrongSaidFormat,
+    #[error("Wrong refs format")]
+    WrongRefsFormat,
 }
 
 impl<'de> Deserialize<'de> for Nested {
@@ -98,71 +101,64 @@ impl<'de> Deserialize<'de> for Nested {
     where
         D: Deserializer<'de>,
     {
-		let input: serde_json::Value = serde_json::Value::deserialize(deserializer)?;
+        let input: serde_json::Value = serde_json::Value::deserialize(deserializer)?;
 
-		let expanded = Nested::expand_frames(input, |seed| {
-			match seed {
-				serde_json::Value::String(said) => NestedFrame::Said(said.parse().unwrap()),
-				serde_json::Value::Object(obj) => {
-					let said: Result<SelfAddressingIdentifier, _> = match obj.get("d") {
-						Some(serde_json::Value::String(said_str)) => {
-							said_str.parse().map_err(D::Error::custom)
-						},
-						None => Err(DeserializationError::MissingSaid).map_err(D::Error::custom),
-						_ => Err(DeserializationError::WrongSaidFormat).map_err(D::Error::custom),
-					};
-					match obj.get("refs") {
-						Some(serde_json::Value::Array(arr)) => {
-							NestedFrame::Value {
-								d: said.unwrap(),
-								refs: arr.to_owned(),
-							}
-						}
-						None => Err(DeserializationError::MissingRefs).map_err(D::Error::custom).unwrap(),
-						_ => Err(DeserializationError::WrongRefsFormat).map_err(D::Error::custom).unwrap()
-					}
-				}
-				_ => todo!(),
-			}
-		});
-		Ok(expanded)
-	}
-
+        let expanded = Nested::expand_frames(input, |seed| match seed {
+            serde_json::Value::String(said) => NestedFrame::Said(said.parse().unwrap()),
+            serde_json::Value::Object(obj) => {
+                let said: Result<SelfAddressingIdentifier, _> = match obj.get("d") {
+                    Some(serde_json::Value::String(said_str)) => {
+                        said_str.parse().map_err(D::Error::custom)
+                    }
+                    None => Err(DeserializationError::MissingSaid).map_err(D::Error::custom),
+                    _ => Err(DeserializationError::WrongSaidFormat).map_err(D::Error::custom),
+                };
+                match obj.get("refs") {
+                    Some(serde_json::Value::Array(arr)) => NestedFrame::Value {
+                        d: said.unwrap(),
+                        refs: arr.to_owned(),
+                    },
+                    None => Err(DeserializationError::MissingRefs)
+                        .map_err(D::Error::custom)
+                        .unwrap(),
+                    _ => Err(DeserializationError::WrongRefsFormat)
+                        .map_err(D::Error::custom)
+                        .unwrap(),
+                }
+            }
+            _ => todo!(),
+        });
+        Ok(expanded)
+    }
 }
-
 
 #[test]
 fn test() {
-	let nested_example = Nested::value(vec![
-		Nested::value(vec![
-			Nested::value(vec![
-				Nested::said("hithere"),
-				Nested::value(vec![
-					Nested::said("hithere1"),
-					Nested::said("hithere2"),
-					Nested::said("hithere3"),
-					Nested::value(vec![
-						Nested::value(vec![
-							Nested::value(vec![
-								Nested::said("hithere1"),
-								Nested::said("hithere2"),
-								Nested::said("hithere3"),
-							])
-						])
-					])
-				])
-			]),
-			Nested::said("hithere4"),
-		])
-	]);
-
+    let nested_example = Nested::value(vec![Nested::value(vec![
+        Nested::value(vec![
+            Nested::said("hithere"),
+            Nested::value(vec![
+                Nested::said("hithere1"),
+                Nested::said("hithere2"),
+                Nested::said("hithere3"),
+                Nested::value(vec![Nested::value(vec![Nested::value(vec![
+                    Nested::said("hithere1"),
+                    Nested::said("hithere2"),
+                    Nested::said("hithere3"),
+                ])])]),
+            ]),
+        ]),
+        Nested::said("hithere4"),
+    ])]);
 
     let serialized = serde_json::to_string_pretty(&nested_example).unwrap();
     println!("{}", &serialized);
 
-	let deser: Nested = serde_json::from_str(&serialized).unwrap();
+    let deser: Nested = serde_json::from_str(&serialized).unwrap();
 
     dbg!(&deser);
-	assert_eq!(serde_json::to_string(&deser).unwrap(), serde_json::to_string(&nested_example).unwrap());
+    assert_eq!(
+        serde_json::to_string(&deser).unwrap(),
+        serde_json::to_string(&nested_example).unwrap()
+    );
 }
-
